@@ -1,0 +1,18 @@
+diff --git a/content/browser/mach_broker_mac.mm b/content/browser/mach_broker_mac.mm
+index 4cf3bb6..9d42b10 100644
+--- a/content/browser/mach_broker_mac.mm
++++ b/content/browser/mach_broker_mac.mm
+@@ -153,9 +153,13 @@ std::string MachBroker::GetMachPortName() {
+       base::CommandLine::ForCurrentProcess();
+   const bool is_child = command_line->HasSwitch(switches::kProcessType);
+ 
++#ifndef MAS_BUILD
+   // In non-browser (child) processes, use the parent's pid.
+   const pid_t pid = is_child ? getppid() : getpid();
+   return base::StringPrintf("%s.rohitfork.%d", base::mac::BaseBundleID(), pid);
++#else
++  return "Electron.rohitfork";
++#endif
+ }
+ 
+ MachBroker::MachBroker() : initialized_(false) {
