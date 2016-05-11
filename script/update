@@ -56,11 +56,14 @@ def chromium_version():
 
 
 def is_source_tarball_updated(version):
-  version_file = os.path.join(SRC_DIR, '.version')
+  version_file = os.path.join(SRC_DIR, 'chrome', 'VERSION')
   existing_version = ''
   try:
-    with open(version_file, 'r') as f:
-      existing_version = f.readline().strip()
+    values = dict()
+    for line in open(version_file, 'r').readlines():
+      key, val = line.rstrip('\r\n').split('=', 1)
+      values[key] = val
+    existing_version = '{0}.{1}.{2}.{3}'.format(values['MAJOR'], values['MINOR'], values['BUILD'], values['PATCH'])
   except IOError as e:
     if e.errno != errno.ENOENT:
       raise
