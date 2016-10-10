@@ -184,6 +184,7 @@ BINARIES = {
     os.path.join('obj', 'third_party', 'webrtc', 'system_wrappers', 'system_wrappers.lib'),
     os.path.join('obj', 'third_party', 'webrtc', 'webrtc_common.cc.pdb'),
     os.path.join('obj', 'third_party', 'webrtc', 'webrtc_common.lib'),
+    os.path.join('..', '..', 'third_party', 'openvr', 'openvr', 'lib', 'win64', 'openvr_api.lib'),
   ],
 }
 

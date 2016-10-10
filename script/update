@@ -36,6 +36,7 @@ def main():
 
   target_arch = args.target_arch
   return (apply_patches() or
+          rebuild_gpu_cmd_buffer() or
           copy_chromiumcontent_files() or
           update_clang() or
           run_gyp(target_arch, args.defines))
@@ -176,6 +177,9 @@ def apply_patches():
   return subprocess.call([sys.executable,
                           os.path.join(SOURCE_ROOT, 'script', 'apply-patches')])
 
+def rebuild_gpu_cmd_buffer():
+  return subprocess.call([sys.executable,
+                          os.path.join(SRC_DIR, 'gpu', 'command_buffer', 'build_gles2_cmd_buffer.py')])
 
 def update_clang():
   if sys.platform not in ['linux2', 'darwin']:

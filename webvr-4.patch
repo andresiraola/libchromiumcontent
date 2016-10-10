@@ -1,0 +1,1087 @@
+diff --git a/content/browser/gamepad/gamepad_data_fetcher.h b/content/browser/gamepad/gamepad_data_fetcher.h
+index 394849a..9ac4ffa 100644
+--- a/content/browser/gamepad/gamepad_data_fetcher.h
++++ b/content/browser/gamepad/gamepad_data_fetcher.h
+@@ -19,8 +19,20 @@ class CONTENT_EXPORT GamepadDataFetcher {
+ 
+   virtual void GetGamepadData(bool devices_changed_hint) = 0;
+   virtual void PauseHint(bool paused) {}
++  
++  virtual GamepadSource source() = 0;
+ 
+   GamepadProvider* provider() { return provider_; }
++  
++  PadState* GetPadState(int source_id) {
++    if (!provider_)
++      return nullptr;
++
++    return provider_->GetPadState(source(), source_id);
++  }
++
++  virtual void Vibrate(int source_id, int duration) { }
++  virtual void CancelVibration(int source_id) { }
+ 
+  protected:
+   friend GamepadProvider;
+diff --git a/content/browser/gamepad/gamepad_platform_data_fetcher_android.cc b/content/browser/gamepad/gamepad_platform_data_fetcher_android.cc
+index b9b7360..1318aac 100644
+--- a/content/browser/gamepad/gamepad_platform_data_fetcher_android.cc
++++ b/content/browser/gamepad/gamepad_platform_data_fetcher_android.cc
+@@ -84,8 +84,7 @@ static void SetGamepadData(JNIEnv* env,
+   if (!connected)
+     return;
+ 
+-  PadState* state = fetcher->provider()->GetPadState(
+-      GAMEPAD_SOURCE_ANDROID, index);
++  PadState* state = fetcher->GetPadState(index);
+ 
+   if (!state)
+     return;
+diff --git a/content/browser/gamepad/gamepad_platform_data_fetcher_android.h b/content/browser/gamepad/gamepad_platform_data_fetcher_android.h
+index 6282577..95d0793 100644
+--- a/content/browser/gamepad/gamepad_platform_data_fetcher_android.h
++++ b/content/browser/gamepad/gamepad_platform_data_fetcher_android.h
+@@ -23,6 +23,8 @@ class GamepadPlatformDataFetcherAndroid : public GamepadDataFetcher {
+  public:
+   GamepadPlatformDataFetcherAndroid();
+   ~GamepadPlatformDataFetcherAndroid() override;
++  
++  GamepadSource source() { return GAMEPAD_SOURCE_ANDROID; }
+ 
+   void PauseHint(bool paused) override;
+ 
+diff --git a/content/browser/gamepad/gamepad_platform_data_fetcher_linux.cc b/content/browser/gamepad/gamepad_platform_data_fetcher_linux.cc
+index 6d88bf5..ad3f9ed 100644
+--- a/content/browser/gamepad/gamepad_platform_data_fetcher_linux.cc
++++ b/content/browser/gamepad/gamepad_platform_data_fetcher_linux.cc
+@@ -127,7 +127,7 @@ void GamepadPlatformDataFetcherLinux::RefreshDevice(udev_device* dev) {
+       return;
+     }
+ 
+-    PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_LINUX_UDEV, index);
++    PadState* state = GetPadState(index);
+     if (!state) {
+       // No slot available for device, don't use.
+       CloseFileDescriptorIfValid(device_fd);
+@@ -238,7 +238,7 @@ void GamepadPlatformDataFetcherLinux::ReadDeviceData(size_t index) {
+     return;
+   }
+ 
+-  PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_LINUX_UDEV, index);
++  PadState* state = GetPadState(index);
+   if (!state)
+     return;
+ 
+diff --git a/content/browser/gamepad/gamepad_platform_data_fetcher_linux.h b/content/browser/gamepad/gamepad_platform_data_fetcher_linux.h
+index f604d29..4bd516e 100644
+--- a/content/browser/gamepad/gamepad_platform_data_fetcher_linux.h
++++ b/content/browser/gamepad/gamepad_platform_data_fetcher_linux.h
+@@ -29,6 +29,8 @@ class GamepadPlatformDataFetcherLinux : public GamepadDataFetcher {
+  public:
+   GamepadPlatformDataFetcherLinux();
+   ~GamepadPlatformDataFetcherLinux() override;
++  
++  GamepadSource source() { return GAMEPAD_SOURCE_LINUX_UDEV; }
+ 
+   // GamepadDataFetcher implementation.
+   void GetGamepadData(bool devices_changed_hint) override;
+diff --git a/content/browser/gamepad/gamepad_platform_data_fetcher_mac.h b/content/browser/gamepad/gamepad_platform_data_fetcher_mac.h
+index 4546dca..0133ff9 100644
+--- a/content/browser/gamepad/gamepad_platform_data_fetcher_mac.h
++++ b/content/browser/gamepad/gamepad_platform_data_fetcher_mac.h
+@@ -29,6 +29,9 @@ class GamepadPlatformDataFetcherMac : public GamepadDataFetcher {
+  public:
+   GamepadPlatformDataFetcherMac();
+   ~GamepadPlatformDataFetcherMac() override;
++  
++  GamepadSource source() { return GAMEPAD_SOURCE_MAC_HID; }
++  
+   void GetGamepadData(bool devices_changed_hint) override;
+   void PauseHint(bool paused) override;
+ 
+diff --git a/content/browser/gamepad/gamepad_platform_data_fetcher_mac.mm b/content/browser/gamepad/gamepad_platform_data_fetcher_mac.mm
+index 609d29f..1e709a3 100644
+--- a/content/browser/gamepad/gamepad_platform_data_fetcher_mac.mm
++++ b/content/browser/gamepad/gamepad_platform_data_fetcher_mac.mm
+@@ -262,8 +262,7 @@ void GamepadPlatformDataFetcherMac::DeviceAdd(IOHIDDeviceRef device) {
+   // Clear some state that may have been left behind by previous gamepads
+   memset(&associated_[slot], 0, sizeof(AssociatedData));
+ 
+-  PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_MAC_HID,
+-                                            location_int);
++  PadState* state = GetPadState(location_int);
+   if (!state)
+     return; // No available slot for this device
+ 
+@@ -347,8 +346,7 @@ void GamepadPlatformDataFetcherMac::ValueChanged(IOHIDValueRef value) {
+   if (slot == WebGamepads::itemsLengthCap)
+     return;
+ 
+-  PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_MAC_HID,
+-                                            associated_[slot].location_id);
++  PadState* state = GetPadState(associated_[slot].location_id);
+   if (!state)
+     return;
+ 
+@@ -391,8 +389,7 @@ void GamepadPlatformDataFetcherMac::GetGamepadData(bool) {
+   // Loop through and GetPadState to indicate the devices are still connected.
+   for (size_t slot = 0; slot < WebGamepads::itemsLengthCap; ++slot) {
+     if (associated_[slot].device_ref != nullptr) {
+-      provider()->GetPadState(GAMEPAD_SOURCE_MAC_HID,
+-                              associated_[slot].location_id);
++      GetPadState(associated_[slot].location_id);
+     }
+   }
+ }
+diff --git a/content/browser/gamepad/gamepad_platform_data_fetcher_win.cc b/content/browser/gamepad/gamepad_platform_data_fetcher_win.cc
+index cf64799..f895e43 100644
+--- a/content/browser/gamepad/gamepad_platform_data_fetcher_win.cc
++++ b/content/browser/gamepad/gamepad_platform_data_fetcher_win.cc
+@@ -7,7 +7,11 @@
+ #include <stddef.h>
+ #include <string.h>
+ 
++#include "base/bind.h"
++#include "base/bind_helpers.h"
++#include "base/single_thread_task_runner.h"
+ #include "base/strings/stringprintf.h"
++#include "base/thread_task_runner_handle.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/win/windows_version.h"
+ #include "content/common/gamepad_hardware_buffer.h"
+@@ -75,6 +79,9 @@ GamepadPlatformDataFetcherWin::GamepadPlatformDataFetcherWin()
+ }
+ 
+ GamepadPlatformDataFetcherWin::~GamepadPlatformDataFetcherWin() {
++  for (size_t i = 0; i < XUSER_MAX_COUNT; ++i) {
++    CancelVibration(i);
++  }
+ }
+ 
+ void GamepadPlatformDataFetcherWin::OnAddedToProvider() {
+@@ -95,7 +102,7 @@ void GamepadPlatformDataFetcherWin::EnumerateDevices() {
+       if (!xinuput_connected_[i])
+         continue;
+ 
+-      PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_WIN_XINPUT, i);
++      PadState* state = GetPadState(i);
+       if (!state)
+         continue;  // No slot available for this gamepad.
+ 
+@@ -198,6 +205,27 @@ void GamepadPlatformDataFetcherWin::GetXInputPadData(int i) {
+   }
+ }
+ 
++void GamepadPlatformDataFetcherWin::Vibrate(int source_id, int duration) {
++  XINPUT_VIBRATION vibration;
++  ZeroMemory( &vibration, sizeof(XINPUT_VIBRATION) );
++  vibration.wLeftMotorSpeed = 32767;
++  vibration.wRightMotorSpeed = 65535;
++  xinput_set_state_(source_id, &vibration);
++
++  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
++      FROM_HERE, base::Bind(&GamepadPlatformDataFetcherWin::CancelVibration,
++          base::Unretained(this), source_id),
++      base::TimeDelta::FromMilliseconds(duration));
++}
++
++void GamepadPlatformDataFetcherWin::CancelVibration(int source_id) {
++  XINPUT_VIBRATION vibration;
++  ZeroMemory( &vibration, sizeof(XINPUT_VIBRATION) );
++  vibration.wLeftMotorSpeed = 0;
++  vibration.wRightMotorSpeed = 0;
++  xinput_set_state_(source_id, &vibration);
++}
++
+ bool GamepadPlatformDataFetcherWin::GetXInputDllFunctions() {
+   xinput_get_capabilities_ = NULL;
+   xinput_get_state_ = NULL;
+@@ -211,6 +239,10 @@ bool GamepadPlatformDataFetcherWin::GetXInputDllFunctions() {
+       xinput_dll_.GetFunctionPointer("XInputGetState"));
+   if (!xinput_get_state_)
+     return false;
++  xinput_set_state_ = reinterpret_cast<XInputSetStateFunc>(
++      xinput_dll_.GetFunctionPointer("XInputSetState"));
++  if (!xinput_set_state_)
++    return false;
+   if (xinput_enable) {
+     // XInputEnable is unavailable before Win8 and deprecated in Win10.
+     xinput_enable(true);
+diff --git a/content/browser/gamepad/gamepad_platform_data_fetcher_win.h b/content/browser/gamepad/gamepad_platform_data_fetcher_win.h
+index 60af0b6..60b39d8 100644
+--- a/content/browser/gamepad/gamepad_platform_data_fetcher_win.h
++++ b/content/browser/gamepad/gamepad_platform_data_fetcher_win.h
+@@ -33,7 +33,13 @@ class GamepadPlatformDataFetcherWin : public GamepadDataFetcher {
+  public:
+   GamepadPlatformDataFetcherWin();
+   ~GamepadPlatformDataFetcherWin() override;
++  
++  GamepadSource source() { return GAMEPAD_SOURCE_WIN_XINPUT; }
++  
+   void GetGamepadData(bool devices_changed_hint) override;
++  
++  void Vibrate(int source_id, int duration) override;
++  void CancelVibration(int source_id) override;
+ 
+  private:
+   void OnAddedToProvider() override;
+@@ -44,6 +50,8 @@ class GamepadPlatformDataFetcherWin : public GamepadDataFetcher {
+     DWORD dwUserIndex, DWORD dwFlags, XINPUT_CAPABILITIES* pCapabilities);
+   typedef DWORD (WINAPI *XInputGetStateFunc)(
+       DWORD dwUserIndex, XINPUT_STATE* pState);
++  typedef DWORD (WINAPI *XInputSetStateFunc)(
++      DWORD dwUserIndex, XINPUT_VIBRATION* pState);
+ 
+   // Get functions from dynamically loading the xinput dll.
+   // Returns true if loading was successful.
+@@ -60,7 +68,8 @@ class GamepadPlatformDataFetcherWin : public GamepadDataFetcher {
+   // |GetXinputDllFunctions|.
+   XInputGetCapabilitiesFunc xinput_get_capabilities_;
+   XInputGetStateFunc xinput_get_state_;
+-
++  XInputSetStateFunc xinput_set_state_;
++  
+   bool xinuput_connected_[XUSER_MAX_COUNT];
+ 
+   DISALLOW_COPY_AND_ASSIGN(GamepadPlatformDataFetcherWin);
+diff --git a/content/browser/gamepad/gamepad_provider.cc b/content/browser/gamepad/gamepad_provider.cc
+index 62521ba..3e15314 100644
+--- a/content/browser/gamepad/gamepad_provider.cc
++++ b/content/browser/gamepad/gamepad_provider.cc
+@@ -415,4 +415,38 @@ void GamepadProvider::MapAndSanitizeGamepadData(
+   }
+ }
+ 
++void GamepadProvider::Vibrate(int index, int duration) {
++  if (!ever_had_user_gesture_ || index >= WebGamepads::itemsLengthCap)
++    return;
++
++  PadState& state = pad_states_.get()[index];
++  if (state.source == GAMEPAD_SOURCE_NONE)
++    return;
++
++  // Could stand to be better
++  for (const auto& it : data_fetchers_) {
++    if (state.source == it->source()) {
++      it->Vibrate(state.source_id, duration);
++      break;
++    }
++  }
++}
++
++void GamepadProvider::CancelVibration(int index) {
++  if (!ever_had_user_gesture_ || index >= WebGamepads::itemsLengthCap)
++    return;
++
++  PadState& state = pad_states_.get()[index];
++  if (state.source == GAMEPAD_SOURCE_NONE)
++    return;
++
++  // Could stand to be better
++  for (const auto& it : data_fetchers_) {
++    if (state.source == it->source()) {
++      it->CancelVibration(state.source_id);
++      break;
++    }
++  }
++}
++
+ }  // namespace content
+diff --git a/content/browser/gamepad/gamepad_provider.h b/content/browser/gamepad/gamepad_provider.h
+index 3e2bcab..dd20921 100644
+--- a/content/browser/gamepad/gamepad_provider.h
++++ b/content/browser/gamepad/gamepad_provider.h
+@@ -124,6 +124,9 @@ class CONTENT_EXPORT GamepadProvider :
+   PadState* GetPadState(GamepadSource source, int source_id);
+ 
+   void SetSanitizationEnabled(bool sanitize) { sanitize_ = sanitize; }
++  
++  void Vibrate(int index, int duration);
++  void CancelVibration(int index);
+ 
+  private:
+   void Initialize(std::unique_ptr<GamepadDataFetcher> fetcher);
+diff --git a/content/browser/gamepad/gamepad_service.cc b/content/browser/gamepad/gamepad_service.cc
+index ef56d31..cd12104 100644
+--- a/content/browser/gamepad/gamepad_service.cc
++++ b/content/browser/gamepad/gamepad_service.cc
+@@ -100,6 +100,18 @@ void GamepadService::RegisterForUserGesture(const base::Closure& closure) {
+   provider_->RegisterForUserGesture(closure);
+ }
+ 
++void GamepadService::Vibrate(int index, int duration) {
++  if (!provider_ || num_active_consumers_ == 0)
++    return;
++  provider_->Vibrate(index, duration);
++}
++
++void GamepadService::CancelVibration(int index) {
++  if (!provider_ || num_active_consumers_ == 0)
++    return;
++  provider_->CancelVibration(index);
++}
++
+ void GamepadService::Terminate() {
+   provider_.reset();
+ }
+diff --git a/content/browser/gamepad/gamepad_service.h b/content/browser/gamepad/gamepad_service.h
+index d3cb62b..67ecfe0 100644
+--- a/content/browser/gamepad/gamepad_service.h
++++ b/content/browser/gamepad/gamepad_service.h
+@@ -64,6 +64,9 @@ class CONTENT_EXPORT GamepadService {
+   // the device. This callback will only be issued once. Should only be called
+   // while a consumer is active.
+   void RegisterForUserGesture(const base::Closure& closure);
++  
++  void Vibrate(int index, int duration);
++  void CancelVibration(int index);
+ 
+   // Returns the shared memory handle of the gamepad data duplicated into the
+   // given process.
+diff --git a/content/browser/gamepad/raw_input_data_fetcher_win.cc b/content/browser/gamepad/raw_input_data_fetcher_win.cc
+index efa2805..d2b8e61 100644
+--- a/content/browser/gamepad/raw_input_data_fetcher_win.cc
++++ b/content/browser/gamepad/raw_input_data_fetcher_win.cc
+@@ -154,8 +154,7 @@ void RawInputDataFetcher::GetGamepadData(bool devices_changed_hint) {
+ 
+   for (const auto& controller : controllers_) {
+     RawGamepadInfo* gamepad = controller.second;
+-    PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_WIN_RAW,
+-                                              gamepad->source_id);
++    PadState* state = GetPadState(gamepad->source_id);
+     if (!state)
+       continue;
+ 
+@@ -209,8 +208,7 @@ void RawInputDataFetcher::EnumerateDevices() {
+         if (!gamepad)
+           continue;
+ 
+-        PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_WIN_RAW,
+-                                                  gamepad->source_id);
++        PadState* state = GetPadState(gamepad->source_id);
+         if (!state)
+           continue;  // No slot available for this gamepad.
+ 
+@@ -283,6 +281,12 @@ RawGamepadInfo* RawInputDataFetcher::ParseGamepadInfo(HANDLE hDevice) {
+       break;
+     }
+   }
++  
++  // This is terrible, but the Oculus Rift seems to think it's a gamepad.
++  // Filter out any Oculus devices. (We'll handle Oculus Touch elsewhere.)
++  if (device_info->hid.dwVendorId == 0x2833) {
++    valid_type = false;
++  }
+ 
+   if (!valid_type)
+     return NULL;
+diff --git a/content/browser/gamepad/raw_input_data_fetcher_win.h b/content/browser/gamepad/raw_input_data_fetcher_win.h
+index 964ff7f..e09ab7c 100644
+--- a/content/browser/gamepad/raw_input_data_fetcher_win.h
++++ b/content/browser/gamepad/raw_input_data_fetcher_win.h
+@@ -65,6 +65,8 @@ class RawInputDataFetcher
+  public:
+   explicit RawInputDataFetcher();
+   ~RawInputDataFetcher() override;
++  
++  GamepadSource source() { return GAMEPAD_SOURCE_WIN_RAW; }
+ 
+   // DestructionObserver overrides.
+   void WillDestroyCurrentMessageLoop() override;
+diff --git a/content/browser/gamepad/xbox_data_fetcher_mac.h b/content/browser/gamepad/xbox_data_fetcher_mac.h
+index 54dd147..a19c7a8 100644
+--- a/content/browser/gamepad/xbox_data_fetcher_mac.h
++++ b/content/browser/gamepad/xbox_data_fetcher_mac.h
+@@ -147,6 +147,8 @@ class XboxDataFetcher : public GamepadDataFetcher,
+  public:
+   XboxDataFetcher();
+   ~XboxDataFetcher() override;
++  
++  GamepadSource source() { return GAMEPAD_SOURCE_MAC_XBOX; }
+ 
+   void GetGamepadData(bool devices_changed_hint) override;
+ 
+diff --git a/content/browser/gamepad/xbox_data_fetcher_mac.mm b/content/browser/gamepad/xbox_data_fetcher_mac.mm
+index 5f46676..96ca088 100644
+--- a/content/browser/gamepad/xbox_data_fetcher_mac.mm
++++ b/content/browser/gamepad/xbox_data_fetcher_mac.mm
+@@ -651,7 +651,7 @@ void XboxDataFetcher::GetGamepadData(bool devices_changed_hint) {
+   // This just loops through all the connected pads and "pings" them to indicate
+   // that they're still active.
+   for (const auto& controller : controllers_) {
+-    provider()->GetPadState(GAMEPAD_SOURCE_MAC_XBOX, controller->location_id());
++    GetPadState(controller->location_id());
+   }
+ }
+ 
+@@ -799,8 +799,7 @@ void XboxDataFetcher::AddController(XboxController* controller) {
+       << " already exists in the set of controllers.";
+   //delegate_->XboxDeviceAdd(controller);
+ 
+-  PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_MAC_XBOX,
+-                                            controller->location_id());
++  PadState* state = GetPadState(controller->location_id());
+   if (!state) {
+     delete controller;
+     return; // No available slot for this device
+@@ -861,8 +860,7 @@ void XboxDataFetcher::XboxControllerGotData(XboxController* controller,
+                                             const XboxController::Data& data) {
+   //delegate_->XboxValueChanged(controller, data);
+ 
+-  PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_MAC_XBOX,
+-                                            controller->location_id());
++  PadState* state = GetPadState(controller->location_id());
+   if (!state)
+     return; // No available slot for this device
+ 
+diff --git a/content/browser/renderer_host/gamepad_browser_message_filter.cc b/content/browser/renderer_host/gamepad_browser_message_filter.cc
+index c03e478..693cf4d 100644
+--- a/content/browser/renderer_host/gamepad_browser_message_filter.cc
++++ b/content/browser/renderer_host/gamepad_browser_message_filter.cc
+@@ -26,6 +26,8 @@ bool GamepadBrowserMessageFilter::OnMessageReceived(
+   IPC_BEGIN_MESSAGE_MAP(GamepadBrowserMessageFilter, message)
+     IPC_MESSAGE_HANDLER(GamepadHostMsg_StartPolling, OnGamepadStartPolling)
+     IPC_MESSAGE_HANDLER(GamepadHostMsg_StopPolling, OnGamepadStopPolling)
++    IPC_MESSAGE_HANDLER(GamepadHostMsg_Vibrate, OnGamepadVibrate)
++    IPC_MESSAGE_HANDLER(GamepadHostMsg_CancelVibration, OnGamepadCancelVibration)
+     IPC_MESSAGE_UNHANDLED(handled = false)
+   IPC_END_MESSAGE_MAP()
+   return handled;
+@@ -64,4 +66,12 @@ void GamepadBrowserMessageFilter::OnGamepadStopPolling() {
+   GamepadService::GetInstance()->ConsumerBecameInactive(this);
+ }
+ 
++void GamepadBrowserMessageFilter::OnGamepadVibrate(int index, int duration) {
++  GamepadService::GetInstance()->Vibrate(index, duration);
++}
++
++void GamepadBrowserMessageFilter::OnGamepadCancelVibration(int index) {
++  GamepadService::GetInstance()->CancelVibration(index);
++}
++
+ }  // namespace content
+diff --git a/content/browser/renderer_host/gamepad_browser_message_filter.h b/content/browser/renderer_host/gamepad_browser_message_filter.h
+index 343c2ac..152362e 100644
+--- a/content/browser/renderer_host/gamepad_browser_message_filter.h
++++ b/content/browser/renderer_host/gamepad_browser_message_filter.h
+@@ -36,6 +36,9 @@ class GamepadBrowserMessageFilter :
+ 
+   void OnGamepadStartPolling(base::SharedMemoryHandle* renderer_handle);
+   void OnGamepadStopPolling();
++  
++  void OnGamepadVibrate(int index, int duration);
++  void OnGamepadCancelVibration(int index);
+ 
+   bool is_started_;
+ 
+diff --git a/content/browser/vr/oculus/oculus_vr_device.cc b/content/browser/vr/oculus/oculus_vr_device.cc
+index abdd4c8..4773bce 100644
+--- a/content/browser/vr/oculus/oculus_vr_device.cc
++++ b/content/browser/vr/oculus/oculus_vr_device.cc
+@@ -101,7 +101,7 @@ VRDeviceInfoPtr OculusVRDevice::GetVRDevice() {
+   rightEye->renderWidth = targetRight.w;
+   rightEye->renderHeight = targetRight.h;
+ 
+-  /*device->stageParameters = mojom::VRStageParameters::New();
++  device->stageParameters = VRStageParameters::New();
+   device->stageParameters->standingTransform = mojo::Array<float>::New(16);
+   mojo::Array<float>& transform =
+       device->stageParameters->standingTransform;
+@@ -122,8 +122,8 @@ VRDeviceInfoPtr OculusVRDevice::GetVRDevice() {
+   transform[14] = 0.0f;
+   transform[15] = 1.0f;
+ 
+-  device->stageParameters->sizeX = 0.0f;
+-  device->stageParameters->sizeZ = 0.0f;*/
++  device->stageParameters->sizeX = 3.0f;
++  device->stageParameters->sizeZ = 3.0f;
+ 
+   return device;
+ }
+@@ -156,16 +156,14 @@ void OculusVRDevice::ResetPose() {
+ 
+ float OculusVRDevice::GetFloorHeight() {
+   double query_time = ovr_GetTimeInSeconds();
+-  ovrTrackingState ovr_state = ovr_GetTrackingState(session_, query_time, true);
+-  ovrVector3f eye_origin = ovr_state.HeadPose.ThePose.Position;
+ 
+   ovr_SetTrackingOriginType(session_, ovrTrackingOrigin_FloorLevel);
+-  ovr_state = ovr_GetTrackingState(session_, query_time, true);
+-  ovrVector3f floor_origin = ovr_state.HeadPose.ThePose.Position;
++  ovrTrackingState ovr_state = ovr_GetTrackingState(session_, query_time, true);
++  ovrVector3f floor_position = ovr_state.HeadPose.ThePose.Position;
+ 
+   ovr_SetTrackingOriginType(session_, ovrTrackingOrigin_EyeLevel);
+ 
+-  return eye_origin.y - floor_origin.y;
++  return floor_position.y;
+ }
+ 
+ }  // namespace content
+diff --git a/content/browser/vr/oculus/oculus_vr_device_provider.cc b/content/browser/vr/oculus/oculus_vr_device_provider.cc
+index f819e41..20e65f8 100644
+--- a/content/browser/vr/oculus/oculus_vr_device_provider.cc
++++ b/content/browser/vr/oculus/oculus_vr_device_provider.cc
+@@ -4,8 +4,6 @@
+ 
+ #include "content/browser/vr/oculus/oculus_vr_device_provider.h"
+ 
+-#include <algorithm>
+-
+ #include "base/bind.h"
+ #include "content/browser/gamepad/gamepad_consumer.h"
+ #include "content/browser/gamepad/gamepad_service.h"
+@@ -13,6 +11,9 @@
+ #include "content/browser/vr/oculus/oculus_vr_gamepad_data_fetcher.h"
+ #include "content/public/browser/browser_thread.h"
+ 
++#include <algorithm>
++#include <memory>
++
+ namespace content {
+ 
+ // Keeps the GamepadProvider alive while the OpenVRDeviceProvider is in use.
+diff --git a/content/browser/vr/oculus/oculus_vr_gamepad_data_fetcher.cc b/content/browser/vr/oculus/oculus_vr_gamepad_data_fetcher.cc
+index 7d303a9..7ae5199 100644
+--- a/content/browser/vr/oculus/oculus_vr_gamepad_data_fetcher.cc
++++ b/content/browser/vr/oculus/oculus_vr_gamepad_data_fetcher.cc
+@@ -50,7 +50,7 @@ void OculusVRGamepadDataFetcher::GetGamepadData(bool devices_changed_hint) {
+   if ((OVR_SUCCESS(ovr_GetInputState(session_, ovrControllerType_Remote,
+       &input_state)))) {
+ 
+-    PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_OCULUS, 0);
++    PadState* state = GetPadState(0);
+     if (state) {
+       WebGamepad& pad = state->data;
+ 
+diff --git a/content/browser/vr/oculus/oculus_vr_gamepad_data_fetcher.h b/content/browser/vr/oculus/oculus_vr_gamepad_data_fetcher.h
+index 148a945..754b28c 100644
+--- a/content/browser/vr/oculus/oculus_vr_gamepad_data_fetcher.h
++++ b/content/browser/vr/oculus/oculus_vr_gamepad_data_fetcher.h
+@@ -17,6 +17,9 @@ class OculusVRGamepadDataFetcher : public GamepadDataFetcher {
+  public:
+   OculusVRGamepadDataFetcher(ovrHmdStruct* session);
+   ~OculusVRGamepadDataFetcher() override;
++  
++  GamepadSource source() { return GAMEPAD_SOURCE_OCULUS; }
++  
+   void GetGamepadData(bool devices_changed_hint) override;
+   void PauseHint(bool paused) override;
+   void OnAddedToProvider() override;
+diff --git a/content/browser/vr/openvr/open_vr_device_provider.cc b/content/browser/vr/openvr/open_vr_device_provider.cc
+index 78e1bc0..ae34338 100644
+--- a/content/browser/vr/openvr/open_vr_device_provider.cc
++++ b/content/browser/vr/openvr/open_vr_device_provider.cc
+@@ -4,8 +4,6 @@
+ 
+ #include "content/browser/vr/openvr/open_vr_device_provider.h"
+ 
+-#include <algorithm>
+-
+ #include "base/logging.h"
+ #include "content/browser/gamepad/gamepad_consumer.h"
+ #include "content/browser/gamepad/gamepad_service.h"
+@@ -13,6 +11,9 @@
+ #include "content/browser/vr/openvr/open_vr_gamepad_data_fetcher.h"
+ #include "third_party/openvr/openvr/headers/openvr.h"
+ 
++#include <algorithm>
++#include <memory>
++
+ namespace content {
+ 
+ // Keeps the GamepadProvider alive while the OpenVRDeviceProvider is in use.
+diff --git a/content/browser/vr/openvr/open_vr_gamepad_data_fetcher.cc b/content/browser/vr/openvr/open_vr_gamepad_data_fetcher.cc
+index 655ed8b..0e92880 100644
+--- a/content/browser/vr/openvr/open_vr_gamepad_data_fetcher.cc
++++ b/content/browser/vr/openvr/open_vr_gamepad_data_fetcher.cc
+@@ -4,8 +4,11 @@
+ 
+ #include "content/browser/vr/openvr/open_vr_gamepad_data_fetcher.h"
+ 
++#include "base/bind.h"
++#include "base/bind_helpers.h"
+ #include "base/logging.h"
+ #include "base/strings/stringprintf.h"
++#include "base/thread_task_runner_handle.h"
+ #include "third_party/WebKit/public/platform/WebGamepads.h"
+ #include "third_party/openvr/openvr/headers/openvr.h"
+ #include "ui/gfx/transform.h"
+@@ -66,7 +69,7 @@ void OpenVRGamepadDataFetcher::GetGamepadData(
+         vr::TrackedDeviceClass_Controller)
+         continue;
+ 
+-    PadState* state = provider()->GetPadState(GAMEPAD_SOURCE_OPENVR, i);
++    PadState* state = GetPadState(i);
+     if (!state)
+       continue; // No available slot.
+ 
+@@ -174,4 +177,21 @@ void OpenVRGamepadDataFetcher::PauseHint(bool paused) {
+   // TODO
+ }
+ 
++void OpenVRGamepadDataFetcher::Vibrate(int source_id, int duration) {
++  if (duration > 3) {
++    vr_system_->TriggerHapticPulse(source_id, 0, 3000);
++
++    // The maximum duration value we can pass into TriggerHapticPulse is something
++    // around 3500, or 3.5ms. In order to keep the vibration going for the
++    // requested duration we have to refresh is every so often.
++
++    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
++        FROM_HERE, base::Bind(&OpenVRGamepadDataFetcher::Vibrate,
++            base::Unretained(this), source_id, duration - 6),
++        base::TimeDelta::FromMilliseconds(6));
++  } else {
++    vr_system_->TriggerHapticPulse(source_id, 0, duration * 1000);
++  }
++}
++
+ }  // namespace content
+diff --git a/content/browser/vr/openvr/open_vr_gamepad_data_fetcher.h b/content/browser/vr/openvr/open_vr_gamepad_data_fetcher.h
+index a7b0c3c..e585599 100644
+--- a/content/browser/vr/openvr/open_vr_gamepad_data_fetcher.h
++++ b/content/browser/vr/openvr/open_vr_gamepad_data_fetcher.h
+@@ -16,9 +16,14 @@ class OpenVRGamepadDataFetcher : public GamepadDataFetcher {
+  public:
+   OpenVRGamepadDataFetcher();
+   ~OpenVRGamepadDataFetcher() override;
++  
++  GamepadSource source() { return GAMEPAD_SOURCE_OPENVR; }
++  
+   void GetGamepadData(bool devices_changed_hint) override;
+   void PauseHint(bool paused) override;
+   void OnAddedToProvider() override;
++  
++  void Vibrate(int source_id, int duration) override;
+ 
+  private:
+   vr::IVRSystem* vr_system_;
+diff --git a/content/common/gamepad_messages.h b/content/common/gamepad_messages.h
+index 63d6556..a1aaabf 100644
+--- a/content/common/gamepad_messages.h
++++ b/content/common/gamepad_messages.h
+@@ -31,3 +31,10 @@ IPC_SYNC_MESSAGE_CONTROL0_1(GamepadHostMsg_StartPolling,
+                             base::SharedMemoryHandle /* handle */)
+ 
+ IPC_SYNC_MESSAGE_CONTROL0_0(GamepadHostMsg_StopPolling)
++
++IPC_MESSAGE_CONTROL2(GamepadHostMsg_Vibrate,
++                     int /* index */,
++                     int /* duration */)
++
++IPC_MESSAGE_CONTROL1(GamepadHostMsg_CancelVibration,
++                     int /* index */)
+diff --git a/content/common/vr_service.mojom b/content/common/vr_service.mojom
+index c1c83b7..4c477b6 100644
+--- a/content/common/vr_service.mojom
++++ b/content/common/vr_service.mojom
+@@ -64,6 +64,7 @@ struct VRDeviceInfo {
+ 
+ interface VRService {
+   GetDevices() => (array<VRDeviceInfo> devices);
++  [Sync]
+   GetPose(uint32 index) => (VRPose pose);
+   ResetPose(uint32 index);
+ };
+\ No newline at end of file
+diff --git a/content/public/renderer/renderer_gamepad_provider.h b/content/public/renderer/renderer_gamepad_provider.h
+index b3b4ce3..520e67f 100644
+--- a/content/public/renderer/renderer_gamepad_provider.h
++++ b/content/public/renderer/renderer_gamepad_provider.h
+@@ -26,6 +26,8 @@ class RendererGamepadProvider
+ 
+   // Provides latest snapshot of gamepads.
+   virtual void SampleGamepads(blink::WebGamepads& gamepads) = 0;
++  virtual void VibrateGamepad(unsigned index, unsigned duration) = 0;
++  virtual void CancelGamepadVibration(unsigned index) = 0;
+ 
+  protected:
+   DISALLOW_COPY_AND_ASSIGN(RendererGamepadProvider);
+diff --git a/content/renderer/gamepad_shared_memory_reader.cc b/content/renderer/gamepad_shared_memory_reader.cc
+index 89ed79e..bf84d22 100644
+--- a/content/renderer/gamepad_shared_memory_reader.cc
++++ b/content/renderer/gamepad_shared_memory_reader.cc
+@@ -104,6 +104,15 @@ void GamepadSharedMemoryReader::SampleGamepads(blink::WebGamepads& gamepads) {
+   }
+ }
+ 
++void GamepadSharedMemoryReader::VibrateGamepad(
++    unsigned index, unsigned duration) {
++  RenderThread::Get()->Send(new GamepadHostMsg_Vibrate(index, duration));
++}
++
++void GamepadSharedMemoryReader::CancelGamepadVibration(unsigned index) {
++  RenderThread::Get()->Send(new GamepadHostMsg_CancelVibration(index));
++}
++
+ GamepadSharedMemoryReader::~GamepadSharedMemoryReader() {
+   StopIfObserving();
+ }
+diff --git a/content/renderer/gamepad_shared_memory_reader.h b/content/renderer/gamepad_shared_memory_reader.h
+index 3aed543..159d36b 100644
+--- a/content/renderer/gamepad_shared_memory_reader.h
++++ b/content/renderer/gamepad_shared_memory_reader.h
+@@ -23,6 +23,9 @@ class GamepadSharedMemoryReader : public RendererGamepadProvider {
+ 
+   // RendererGamepadProvider implementation.
+   void SampleGamepads(blink::WebGamepads& gamepads) override;
++  void VibrateGamepad(unsigned index, unsigned duration) override;
++  void CancelGamepadVibration(unsigned index) override;
++
+   bool OnControlMessageReceived(const IPC::Message& message) override;
+   void Start(blink::WebPlatformEventListener* listener) override;
+ 
+diff --git a/content/renderer/renderer_blink_platform_impl.cc b/content/renderer/renderer_blink_platform_impl.cc
+index 5ef967f..65b8666 100644
+--- a/content/renderer/renderer_blink_platform_impl.cc
++++ b/content/renderer/renderer_blink_platform_impl.cc
+@@ -834,6 +834,25 @@ void RendererBlinkPlatformImpl::sampleGamepads(WebGamepads& gamepads) {
+   static_cast<RendererGamepadProvider*>(observer)->SampleGamepads(gamepads);
+ }
+ 
++void RendererBlinkPlatformImpl::vibrateGamepad(
++    unsigned index, unsigned duration) {
++  PlatformEventObserverBase* observer =
++      platform_event_observers_.Lookup(blink::WebPlatformEventTypeGamepad);
++  if (!observer)
++    return;
++  static_cast<RendererGamepadProvider*>(observer)->VibrateGamepad(
++      index, duration);
++}
++
++void RendererBlinkPlatformImpl::cancelGamepadVibration(unsigned index) {
++  PlatformEventObserverBase* observer =
++      platform_event_observers_.Lookup(blink::WebPlatformEventTypeGamepad);
++  if (!observer)
++    return;
++  static_cast<RendererGamepadProvider*>(observer)->CancelGamepadVibration(
++      index);
++}
++
+ //------------------------------------------------------------------------------
+ 
+ WebMediaRecorderHandler*
+diff --git a/content/renderer/renderer_blink_platform_impl.h b/content/renderer/renderer_blink_platform_impl.h
+index c054ee4..85ec2e5 100644
+--- a/content/renderer/renderer_blink_platform_impl.h
++++ b/content/renderer/renderer_blink_platform_impl.h
+@@ -148,6 +148,8 @@ class CONTENT_EXPORT RendererBlinkPlatformImpl : public BlinkPlatformImpl {
+ 
+   blink::WebBlobRegistry* blobRegistry() override;
+   void sampleGamepads(blink::WebGamepads&) override;
++  void vibrateGamepad(unsigned index, unsigned duration) override;
++  void cancelGamepadVibration(unsigned index) override;
+   blink::WebRTCPeerConnectionHandler* createRTCPeerConnectionHandler(
+       blink::WebRTCPeerConnectionHandlerClient* client) override;
+   blink::WebRTCCertificateGenerator* createRTCCertificateGenerator() override;
+diff --git a/content/renderer/vr/vr_dispatcher.cc b/content/renderer/vr/vr_dispatcher.cc
+index 8acedba..7e73f44 100644
+--- a/content/renderer/vr/vr_dispatcher.cc
++++ b/content/renderer/vr/vr_dispatcher.cc
+@@ -33,13 +33,9 @@ void VRDispatcher::getDevices(blink::WebVRGetDevicesCallback* callback) {
+ 
+ void VRDispatcher::getPose(unsigned int index,
+                                   blink::WebVRPose& pose) {
+-  GetVRServicePtr()->GetPose(
+-      index,
+-      base::Bind(&VRDispatcher::OnGetPose, base::Unretained(&pose)));
+-
+-  // This call needs to return results synchronously in order to be useful and
+-  // provide the lowest latency results possible.
+-  GetVRServicePtr().WaitForIncomingResponse();
++  VRPosePtr mojo_pose;
++  GetVRServicePtr()->GetPose(index, &mojo_pose);
++  pose = mojo_pose.To<blink::WebVRPose>();
+ }
+ 
+ void VRDispatcher::resetPose(unsigned int index) {
+@@ -64,9 +60,4 @@ void VRDispatcher::OnGetDevices(
+   pending_requests_.Remove(request_id);
+ }
+ 
+-void VRDispatcher::OnGetPose(blink::WebVRPose* pose,
+-                             const VRPosePtr& mojo_pose) {
+-  *pose = mojo_pose.To<blink::WebVRPose>();
+-}
+-
+ }  // namespace content
+diff --git a/content/renderer/vr/vr_dispatcher.h b/content/renderer/vr/vr_dispatcher.h
+index 7372cf9..90b90d5 100644
+--- a/content/renderer/vr/vr_dispatcher.h
++++ b/content/renderer/vr/vr_dispatcher.h
+@@ -38,8 +38,6 @@ class VRDispatcher : NON_EXPORTED_BASE(public blink::WebVRClient) {
+   // Callback handlers
+   void OnGetDevices(int request_id,
+                     const mojo::Array<VRDeviceInfoPtr>& devices);
+-  static void OnGetPose(blink::WebVRPose* pose,
+-                        const VRPosePtr& mojo_pose);
+ 
+   // Tracks requests sent to browser to match replies with callbacks.
+   // Owns callback objects.
+diff --git a/third_party/WebKit/Source/modules/gamepad/Gamepad.cpp b/third_party/WebKit/Source/modules/gamepad/Gamepad.cpp
+index 388e2e0..01b77fd 100644
+--- a/third_party/WebKit/Source/modules/gamepad/Gamepad.cpp
++++ b/third_party/WebKit/Source/modules/gamepad/Gamepad.cpp
+@@ -24,12 +24,46 @@
+  */
+ 
+ #include "modules/gamepad/Gamepad.h"
++#include "modules/gamepad/GamepadDispatcher.h"
++
++// Maximum number of entries in a vibration pattern.
++const unsigned kVibrationPatternLengthMax = 99;
++
++// Maximum duration of a vibration is 10 seconds.
++const unsigned kVibrationDurationMsMax = 10000;
++
++blink::Gamepad::VibrationPattern sanitizeGamepadVibrationPatternInternal(const blink::Gamepad::VibrationPattern& pattern)
++{
++    blink::Gamepad::VibrationPattern sanitized = pattern;
++    size_t length = sanitized.size();
++
++    // If the pattern is too long then truncate it.
++    if (length > kVibrationPatternLengthMax) {
++        sanitized.shrink(kVibrationPatternLengthMax);
++        length = kVibrationPatternLengthMax;
++    }
++
++    // If any pattern entry is too long then truncate it.
++    for (size_t i = 0; i < length; ++i) {
++        if (sanitized[i] > kVibrationDurationMsMax)
++            sanitized[i] = kVibrationDurationMsMax;
++    }
++
++    // If the last item in the pattern is a pause then discard it.
++    if (length && !(length % 2))
++        sanitized.removeLast();
++
++    return sanitized;
++}
+ 
+ namespace blink {
+ 
+ Gamepad::Gamepad()
+     : m_index(0)
+     , m_timestamp(0)
++    , m_timerStart(this, &Gamepad::timerStartFired)
++    , m_timerStop(this, &Gamepad::timerStopFired)
++    , m_isVibrating(false)
+ {
+ }
+ 
+@@ -71,6 +105,74 @@ void Gamepad::setPose(const WebGamepadPose& pose) {
+     m_pose->setPose(pose);
+ }
+ 
++bool Gamepad::vibrate(unsigned time)
++{
++    VibrationPattern pattern;
++    pattern.append(time);
++    return vibrate(pattern);
++}
++
++bool Gamepad::vibrate(const VibrationPattern& pattern)
++{
++    // Cancelling clears the stored pattern so do it before setting the new one.
++    if (m_isVibrating)
++        cancelVibration();
++
++    m_pattern = sanitizeGamepadVibrationPatternInternal(pattern);
++
++    if (m_timerStart.isActive())
++        m_timerStart.stop();
++
++    if (!m_pattern.size())
++        return true;
++
++    if (m_pattern.size() == 1 && !m_pattern[0]) {
++        m_pattern.clear();
++        return true;
++    }
++
++    m_timerStart.startOneShot(0, BLINK_FROM_HERE);
++    m_isVibrating = true;
++    return true;
++}
++
++void Gamepad::cancelVibration()
++{
++    m_pattern.clear();
++    if (m_isVibrating) {
++        //Platform::current()->cancelVibration();
++        GamepadDispatcher::instance().cancelVibration(m_index);
++        m_isVibrating = false;
++        m_timerStop.stop();
++    }
++}
++
++void Gamepad::timerStartFired(Timer<Gamepad>* timer)
++{
++    ASSERT_UNUSED(timer, timer == &m_timerStart);
++
++    if (m_pattern.size()) {
++        m_isVibrating = true;
++        //Platform::current()->vibrate(m_pattern[0]);
++        GamepadDispatcher::instance().vibrate(m_index, m_pattern[0]);
++        m_timerStop.startOneShot(m_pattern[0] / 1000.0, BLINK_FROM_HERE);
++        m_pattern.remove(0);
++    }
++}
++
++void Gamepad::timerStopFired(Timer<Gamepad>* timer)
++{
++    ASSERT_UNUSED(timer, timer == &m_timerStop);
++
++    if (m_pattern.isEmpty())
++        m_isVibrating = false;
++
++    if (m_pattern.size()) {
++        m_timerStart.startOneShot(m_pattern[0] / 1000.0, BLINK_FROM_HERE);
++        m_pattern.remove(0);
++    }
++}
++
+ DEFINE_TRACE(Gamepad)
+ {
+     visitor->trace(m_buttons);
+diff --git a/third_party/WebKit/Source/modules/gamepad/Gamepad.h b/third_party/WebKit/Source/modules/gamepad/Gamepad.h
+index 43d580b..901d042 100644
+--- a/third_party/WebKit/Source/modules/gamepad/Gamepad.h
++++ b/third_party/WebKit/Source/modules/gamepad/Gamepad.h
+@@ -29,6 +29,7 @@
+ #include "bindings/core/v8/ScriptWrappable.h"
+ #include "modules/gamepad/GamepadButton.h"
+ #include "modules/vr/VRPose.h"
++#include "platform/Timer.h"
+ #include "platform/heap/Handle.h"
+ #include "public/platform/WebGamepad.h"
+ #include "wtf/Vector.h"
+@@ -39,6 +40,8 @@ namespace blink {
+ class Gamepad final : public GarbageCollectedFinalized<Gamepad>, public ScriptWrappable {
+     DEFINE_WRAPPERTYPEINFO();
+ public:
++    typedef Vector<unsigned> VibrationPattern;
++    
+     static Gamepad* create()
+     {
+         return new Gamepad;
+@@ -70,6 +73,15 @@ public:
+     
+     VRPose* pose() const { return m_pose; }
+     void setPose(const WebGamepadPose& pose);
++    
++    // Vibration
++    bool vibrate(unsigned time);
++    bool vibrate(const VibrationPattern&);
++    void cancelVibration();
++    void timerStartFired(Timer<Gamepad>*);
++    void timerStopFired(Timer<Gamepad>*);
++    bool isVibrating() const { return m_isVibrating; }
++    VibrationPattern pattern() const { return m_pattern; }
+ 
+     DECLARE_TRACE();
+ 
+@@ -84,6 +96,11 @@ private:
+     DoubleVector m_axes;
+     GamepadButtonVector m_buttons;
+     Member<VRPose> m_pose;
++    
++    Timer<Gamepad> m_timerStart;
++    Timer<Gamepad> m_timerStop;
++    bool m_isVibrating;
++    VibrationPattern m_pattern;
+ };
+ 
+ } // namespace blink
+diff --git a/third_party/WebKit/Source/modules/gamepad/Gamepad.idl b/third_party/WebKit/Source/modules/gamepad/Gamepad.idl
+index d71c0b0..9e17d3b 100644
+--- a/third_party/WebKit/Source/modules/gamepad/Gamepad.idl
++++ b/third_party/WebKit/Source/modules/gamepad/Gamepad.idl
+@@ -35,4 +35,8 @@
+     readonly attribute GamepadButton[] buttons;
+     
+     readonly attribute VRPose? pose;
++    
++    // FIXME: should be union type http://crbug.com/240176
++    boolean vibrate([Clamp] unsigned long pattern);
++    boolean vibrate(sequence<unsigned long> pattern);
+ };
+diff --git a/third_party/WebKit/Source/modules/gamepad/GamepadDispatcher.cpp b/third_party/WebKit/Source/modules/gamepad/GamepadDispatcher.cpp
+index b2e7dbe..a3eec48 100644
+--- a/third_party/WebKit/Source/modules/gamepad/GamepadDispatcher.cpp
++++ b/third_party/WebKit/Source/modules/gamepad/GamepadDispatcher.cpp
+@@ -21,6 +21,16 @@ void GamepadDispatcher::sampleGamepads(WebGamepads& gamepads)
+     Platform::current()->sampleGamepads(gamepads);
+ }
+ 
++void GamepadDispatcher::vibrate(unsigned index, unsigned duration)
++{
++    Platform::current()->vibrateGamepad(index, duration);
++}
++
++void GamepadDispatcher::cancelVibration(unsigned index)
++{
++    Platform::current()->cancelGamepadVibration(index);
++}
++
+ GamepadDispatcher::GamepadDispatcher()
+ {
+ }
+diff --git a/third_party/WebKit/Source/modules/gamepad/GamepadDispatcher.h b/third_party/WebKit/Source/modules/gamepad/GamepadDispatcher.h
+index 2f43bf8..3296b92 100644
+--- a/third_party/WebKit/Source/modules/gamepad/GamepadDispatcher.h
++++ b/third_party/WebKit/Source/modules/gamepad/GamepadDispatcher.h
+@@ -21,6 +21,9 @@ public:
+     ~GamepadDispatcher() override;
+ 
+     void sampleGamepads(WebGamepads&);
++    
++    void vibrate(unsigned index, unsigned duration);
++    void cancelVibration(unsigned index);
+ 
+     struct ConnectionChange {
+         DISALLOW_NEW();
+diff --git a/third_party/WebKit/Source/modules/vr/VRDisplay.cpp b/third_party/WebKit/Source/modules/vr/VRDisplay.cpp
+index e508c39..876243c 100644
+--- a/third_party/WebKit/Source/modules/vr/VRDisplay.cpp
++++ b/third_party/WebKit/Source/modules/vr/VRDisplay.cpp
+@@ -327,12 +327,17 @@ void VRDisplay::submitFrame(VRPose* pose)
+             sharedContext->WaitSyncTokenCHROMIUM(mailbox.syncToken);
+         GLuint vrSourceTexture = sharedContext->CreateAndConsumeTextureCHROMIUM(mailbox.textureTarget, mailbox.name);
+ 
++        // Get last orientation
++        float x = 0.0f, y = 0.0f, z = 0.0f, w = 1.0f;
++        if (!pose || pose->orientation()) {
++            x = pose->orientation()->data()[0];
++            y = pose->orientation()->data()[1];
++            z = pose->orientation()->data()[2];
++            w = pose->orientation()->data()[3];
++        }
++
+         sharedContext->SubmitVRCompositorFrameCHROMIUM(
+-            m_compositorHandle, vrSourceTexture,
+-            pose->orientation()->data()[0],
+-            pose->orientation()->data()[1],
+-            pose->orientation()->data()[2],
+-            pose->orientation()->data()[3]);
++            m_compositorHandle, vrSourceTexture, x, y, z, w);
+ 
+         sharedContext->Flush();
+ 
+diff --git a/third_party/WebKit/public/platform/Platform.h b/third_party/WebKit/public/platform/Platform.h
+index 72a3e18..5044602 100644
+--- a/third_party/WebKit/public/platform/Platform.h
++++ b/third_party/WebKit/public/platform/Platform.h
+@@ -237,6 +237,8 @@ public:
+     // Gamepad -------------------------------------------------------------
+ 
+     virtual void sampleGamepads(WebGamepads& into) { into.length = 0; }
++    virtual void vibrateGamepad(unsigned index, unsigned duration) { }
++    virtual void cancelGamepadVibration(unsigned index) { }
+ 
+     // History -------------------------------------------------------------
+ 
+-- 
+2.7.4.windows.1
+
